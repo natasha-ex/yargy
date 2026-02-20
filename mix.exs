@@ -21,7 +21,7 @@ defmodule Yargy.MixProject do
 
   defp deps do
     [
-      {:morph_ru, path: "../morph_ru"},
+      {:morph_ru, "~> 0.1"},
       {:jason, "~> 1.4"},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
