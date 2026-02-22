@@ -17,12 +17,12 @@ Elixir port of [natasha/yargy](https://github.com/natasha/yargy). Depends on [mo
 ```elixir
 def deps do
   [
-    {:yargy, "~> 0.3"}
+    {:yargy, "~> 0.4"}
   ]
 end
 ```
 
-## Grammar DSL (v0.2)
+## Grammar DSL
 
 Define grammars declaratively with `use Yargy.Grammar`. Rules compile
 once at module load time and are cached in `persistent_term`.
@@ -87,6 +87,56 @@ MyApp.PersonGrammar.person_text("Адвокат Иванов Иван Петро
 - `person(tokens)` — find all matches in morph-tagged tokens
 - `person_text(text)` — tokenize + morph-tag, then find matches
 - `person_parser()` — return the pre-built `%Parser{}` struct
+
+## Bag-of-features matchers
+
+`defmatch` checks for unordered token presence — no sequential parsing needed.
+Useful for sentence classification.
+
+```elixir
+defmodule MyApp.SentenceClassifier do
+  use Yargy.Grammar
+
+  defmatch :evidence, all_of([
+    any_token(lemma(~w[подтверждаться подтвердить])),
+    any_token(lemma(~w[акт квитанция чек выписка]))
+  ])
+
+  defmatch :demand, any_token(all([
+    lemma(~w[требовать просить взыскать]),
+    gram("VERB")
+  ]))
+
+  defmatch :short_title, all_of([
+    any_token(lemma("претензия")),
+    max_words(5)
+  ])
+end
+
+MyApp.SentenceClassifier.evidence_match?("Оплата подтверждается актом")
+# true
+
+MyApp.SentenceClassifier.demand_match?("Истец требует возмещения")
+# true
+```
+
+### Match combinators
+
+| Function | Meaning |
+|---|---|
+| `any_token(pred)` | ∃ token matching predicate |
+| `no_token(pred)` | ¬∃ token matching predicate |
+| `first_token(pred)` | first word token matches |
+| `all_of([...])` | all conditions hold (AND) |
+| `any_of([...])` | at least one holds (OR) |
+| `max_words(n)` | ≤ n word tokens |
+
+### Generated functions
+
+`defmatch :evidence, ...` generates:
+
+- `evidence?(tokens)` — check morph-tagged tokens
+- `evidence_match?(text)` — tokenize + morph-tag, then check
 
 ## Low-level API
 

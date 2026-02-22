@@ -146,6 +146,94 @@ defmodule Yargy.GrammarTest do
     end
   end
 
+  # --- defmatch bag-of-features ---
+
+  defmodule SentenceClassifier do
+    use Yargy.Grammar
+
+    defmatch :evidence, all_of([
+      any_token(lemma(~w[подтверждаться подтвердить подтверждать свидетельствовать])),
+      any_token(lemma(~w[заключение акт экспертиза квитанция чек выписка справка]))
+    ])
+
+    defmatch :demand_verb, any_token(all([lemma(~w[требовать просить взыскать обязать вернуть]), gram("VERB")]))
+
+    defmatch :threat, all_of([
+      any_token(lemma("вынудить")),
+      any_token(caseless("суд"))
+    ])
+
+    defmatch :procedural_title, all_of([
+      any_token(lemma("претензия")),
+      any_of([
+        any_token(lemma("досудебный")),
+        max_words(5)
+      ])
+    ])
+
+    defmatch :signature, any_of([
+      any_token(lemma("уважение")),
+      any_token(lemma("подпись"))
+    ])
+
+    defmatch :starts_with_demand, first_token(lemma(~w[требовать просить]))
+
+    defmatch :no_verbs, no_token(gram("VERB"))
+  end
+
+  describe "defmatch" do
+    test "evidence pattern matches" do
+      assert SentenceClassifier.evidence_match?("Оплата подтверждается актом выполненных работ")
+    end
+
+    test "evidence pattern rejects unrelated" do
+      refute SentenceClassifier.evidence_match?("Ответчик не исполнил обязательства")
+    end
+
+    test "demand_verb matches conjugated verb" do
+      assert SentenceClassifier.demand_verb_match?("Истец требует возмещения убытков")
+    end
+
+    test "threat matches" do
+      assert SentenceClassifier.threat_match?("Будем вынуждены обратиться в суд")
+    end
+
+    test "procedural_title matches short title" do
+      assert SentenceClassifier.procedural_title_match?("ПРЕТЕНЗИЯ")
+    end
+
+    test "procedural_title matches досудебная претензия" do
+      assert SentenceClassifier.procedural_title_match?("ДОСУДЕБНАЯ ПРЕТЕНЗИЯ")
+    end
+
+    test "procedural_title rejects long sentence with претензия" do
+      refute SentenceClassifier.procedural_title_match?(
+        "В связи с данной претензией просим рассмотреть вопрос о возмещении"
+      )
+    end
+
+    test "signature matches" do
+      assert SentenceClassifier.signature_match?("С уважением, директор")
+    end
+
+    test "starts_with_demand matches" do
+      assert SentenceClassifier.starts_with_demand_match?("Просим вернуть денежные средства")
+    end
+
+    test "starts_with_demand rejects mid-sentence" do
+      refute SentenceClassifier.starts_with_demand_match?("Ответчик просит отказать")
+    end
+
+    test "no_verbs matches verbless sentence" do
+      assert SentenceClassifier.no_verbs_match?("ДОСУДЕБНАЯ ПРЕТЕНЗИЯ")
+    end
+
+    test "works with pre-tokenized tokens" do
+      tokens = Yargy.Pipeline.morph_tokenize("С уважением, директор")
+      assert SentenceClassifier.signature?(tokens)
+    end
+  end
+
   # --- Compile-time caching ---
 
   describe "compile-time" do

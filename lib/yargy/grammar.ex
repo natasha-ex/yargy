@@ -100,6 +100,21 @@ defmodule Yargy.Grammar do
   def optional(combinator), do: {:optional, combinator}
   def repeat(combinator, opts \\ []), do: {:repeat, combinator, opts}
 
+  # --- Match combinators (bag-of-features, not sequential) ---
+
+  @doc "At least one token matches the predicate."
+  def any_token(terminal), do: {:match, :any_token, terminal}
+  @doc "No token matches the predicate."
+  def no_token(terminal), do: {:match, :no_token, terminal}
+  @doc "First word token matches the predicate."
+  def first_token(terminal), do: {:match, :first_token, terminal}
+  @doc "All conditions must hold (logical AND over match conditions)."
+  def all_of(conditions) when is_list(conditions), do: {:match, :all_of, conditions}
+  @doc "At least one condition must hold (logical OR over match conditions)."
+  def any_of(conditions) when is_list(conditions), do: {:match, :any_of, conditions}
+  @doc "At most `n` word tokens in the sentence."
+  def max_words(n) when is_integer(n), do: {:match, :max_words, n}
+
   def sequence(left, right) do
     left_items = unwrap_sequence(left)
     right_items = unwrap_sequence(right)
@@ -190,6 +205,53 @@ defmodule Yargy.Grammar do
     Predicate.or_(fns)
   end
 
+  # --- Match compilation: match combinator → (tokens -> boolean) ---
+
+  @doc false
+  def build_matcher(match_spec) do
+    compile_match(match_spec)
+  end
+
+  defp compile_match({:match, :any_token, terminal}) do
+    pred_fn = to_predicate(unwrap_terminal(terminal))
+    fn tokens -> Enum.any?(tokens, pred_fn) end
+  end
+
+  defp compile_match({:match, :no_token, terminal}) do
+    pred_fn = to_predicate(unwrap_terminal(terminal))
+    fn tokens -> not Enum.any?(tokens, pred_fn) end
+  end
+
+  defp compile_match({:match, :first_token, terminal}) do
+    pred_fn = to_predicate(unwrap_terminal(terminal))
+
+    fn tokens ->
+      case Enum.find(tokens, &(&1.type == :word)) do
+        nil -> false
+        token -> pred_fn.(token)
+      end
+    end
+  end
+
+  defp compile_match({:match, :all_of, conditions}) do
+    matchers = Enum.map(conditions, &compile_match/1)
+    fn tokens -> Enum.all?(matchers, fn m -> m.(tokens) end) end
+  end
+
+  defp compile_match({:match, :any_of, conditions}) do
+    matchers = Enum.map(conditions, &compile_match/1)
+    fn tokens -> Enum.any?(matchers, fn m -> m.(tokens) end) end
+  end
+
+  defp compile_match({:match, :max_words, n}) do
+    fn tokens ->
+      Enum.count(tokens, &(&1.type == :word)) <= n
+    end
+  end
+
+  defp unwrap_terminal({:terminal, spec}), do: spec
+  defp unwrap_terminal(other), do: other
+
   # --- Macros ---
 
   defmacro __using__(_opts) do
@@ -199,13 +261,16 @@ defmodule Yargy.Grammar do
           token: 1, lemma: 1, gram: 1, integer: 0, word: 0, punct: 1,
           capitalized: 0, upper: 0, lower: 0, length_eq: 1, gte: 1, lte: 1,
           caseless: 1, all: 1, any: 1, pred: 1, rule: 1, choice: 1, optional: 1,
-          repeat: 1, repeat: 2, defrule: 2, defgrammar: 2
+          repeat: 1, repeat: 2, defrule: 2, defgrammar: 2,
+          any_token: 1, no_token: 1, first_token: 1, all_of: 1, any_of: 1,
+          max_words: 1, defmatch: 2
         ]
 
       import Yargy.Grammar.Operators, only: [~>: 2]
 
       Module.register_attribute(__MODULE__, :yargy_rules, accumulate: true)
       Module.register_attribute(__MODULE__, :yargy_grammars, accumulate: true)
+      Module.register_attribute(__MODULE__, :yargy_matchers, accumulate: true)
 
       @before_compile Yargy.Grammar
     end
@@ -229,9 +294,34 @@ defmodule Yargy.Grammar do
     end
   end
 
+  @doc """
+  Defines a bag-of-features matcher — checks unordered token presence.
+
+  Generates `name?(tokens)` and `name_match?(text)` functions.
+
+  ## Example
+
+      defmatch :evidence, all_of([
+        any_token(lemma(~w[подтверждаться подтвердить])),
+        any_token(lemma(~w[акт квитанция чек выписка]))
+      ])
+
+      # Generates:
+      # evidence?(tokens) :: boolean
+      # evidence_match?(text) :: boolean
+  """
+  defmacro defmatch(name, match_spec) do
+    escaped_spec = Macro.escape(match_spec)
+
+    quote do
+      @yargy_matchers %{name: unquote(name), match_ast: unquote(escaped_spec)}
+    end
+  end
+
   defmacro __before_compile__(env) do
     rules_raw = Module.get_attribute(env.module, :yargy_rules) |> Enum.reverse()
     grammars_raw = Module.get_attribute(env.module, :yargy_grammars) |> Enum.reverse()
+    matchers_raw = Module.get_attribute(env.module, :yargy_matchers) |> Enum.reverse()
 
     # Generate __yargy_init__/0 that rebuilds all rules and parsers.
     # Combinator ASTs are unquoted here, so `pred(fn ... end)` closures are
@@ -296,6 +386,36 @@ defmodule Yargy.Grammar do
         end
       end)
 
+    init_matchers =
+      Enum.map(matchers_raw, fn %{name: name, match_ast: match_ast} ->
+        pt_key = Macro.escape({env.module, :yargy_matcher, name})
+
+        quote do
+          matcher = Yargy.Grammar.build_matcher(unquote(match_ast))
+          :persistent_term.put(unquote(pt_key), matcher)
+        end
+      end)
+
+    matcher_fns =
+      Enum.map(matchers_raw, fn %{name: name} ->
+        pt_key = Macro.escape({env.module, :yargy_matcher, name})
+
+        quote do
+          @doc "Checks if morph-tagged tokens match the `#{unquote(name)}` pattern."
+          def unquote(:"#{name}?")(tokens) when is_list(tokens) do
+            Yargy.Grammar.ensure_initialized(__MODULE__)
+            matcher = :persistent_term.get(unquote(pt_key))
+            matcher.(tokens)
+          end
+
+          @doc "Checks if raw text matches the `#{unquote(name)}` pattern."
+          def unquote(:"#{name}_match?")(text) when is_binary(text) do
+            tokens = Yargy.Pipeline.morph_tokenize(text)
+            unquote(:"#{name}?")(tokens)
+          end
+        end
+      end)
+
     quote do
       @doc false
       def __yargy_init__ do
@@ -304,7 +424,8 @@ defmodule Yargy.Grammar do
             token: 1, lemma: 1, gram: 1, integer: 0, word: 0, punct: 1,
             capitalized: 0, upper: 0, lower: 0, length_eq: 1, gte: 1, lte: 1,
             caseless: 1, all: 1, any: 1, pred: 1, rule: 1, choice: 1, optional: 1,
-            repeat: 1, repeat: 2
+            repeat: 1, repeat: 2, any_token: 1, no_token: 1, first_token: 1,
+            all_of: 1, any_of: 1, max_words: 1
           ]
 
         import Yargy.Grammar.Operators, only: [~>: 2]
@@ -312,11 +433,13 @@ defmodule Yargy.Grammar do
         rule_map = %{}
         unquote_splicing(init_body)
         unquote_splicing(init_grammars)
+        unquote_splicing(init_matchers)
         :ok
       end
 
       unquote_splicing(rule_fns)
       unquote_splicing(grammar_fns)
+      unquote_splicing(matcher_fns)
     end
   end
 end
