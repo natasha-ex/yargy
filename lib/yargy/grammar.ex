@@ -4,25 +4,25 @@ defmodule Yargy.Grammar do
 
   Provides a NimbleParsec-inspired API for building Yargy grammars
   with morphological token predicates. Rules and parsers are built
-  once at module load time and cached in `persistent_term`.
+  lazily on first access and cached in `persistent_term`.
 
   ## Usage
 
       defmodule MyApp.PersonGrammar do
         use Yargy.Grammar
 
-        defrule :surname, gram("Surn") |> capitalized()
-        defrule :first_name, gram("Name") |> capitalized()
-        defrule :patronymic, gram("Patr") |> capitalized()
+        defrule :surname, gram("Surn") ~> capitalized()
+        defrule :first_name, gram("Name") ~> capitalized()
+        defrule :patronymic, gram("Patr") ~> capitalized()
         defrule :dot, token(".")
-        defrule :initial, upper() |> length_eq(1)
-        defrule :initial_dot, rule(:initial) |> rule(:dot)
+        defrule :initial, upper() ~> length_eq(1)
+        defrule :initial_dot, rule(:initial) ~> rule(:dot)
 
         defgrammar :person, choice([
-          rule(:surname) |> rule(:first_name) |> optional(rule(:patronymic)),
-          rule(:first_name) |> optional(rule(:patronymic)) |> rule(:surname),
-          rule(:surname) |> rule(:initial_dot) |> rule(:initial_dot),
-          rule(:initial_dot) |> rule(:initial_dot) |> rule(:surname)
+          rule(:surname) ~> rule(:first_name) ~> optional(rule(:patronymic)),
+          rule(:first_name) ~> optional(rule(:patronymic)) ~> rule(:surname),
+          rule(:surname) ~> rule(:initial_dot) ~> rule(:initial_dot),
+          rule(:initial_dot) ~> rule(:initial_dot) ~> rule(:surname)
         ])
       end
 
@@ -49,7 +49,7 @@ defmodule Yargy.Grammar do
 
   ## Composition
 
-  - `a |> b` — sequence (left to right)
+  - `a ~> b` — sequence (left to right)
   - `choice([a, b, c])` — alternation
   - `optional(a)` — zero or one
   - `repeat(a)` — one or more
@@ -115,6 +115,36 @@ defmodule Yargy.Grammar do
   def build_rule(combinator, name, rule_map) do
     rule = to_rule(combinator, rule_map)
     Rule.named(rule, to_string(name))
+  end
+
+  @doc false
+  def init_module(module) do
+    init_key = {module, :yargy_initialized}
+
+    case :persistent_term.get(init_key, false) do
+      true ->
+        :ok
+
+      false ->
+        rules_raw = module.__yargy_rules__()
+        grammars_raw = module.__yargy_grammars__()
+
+        rule_map =
+          Enum.reduce(rules_raw, %{}, fn {name, combinator}, acc ->
+            compiled = build_rule(combinator, name, acc)
+            :persistent_term.put({module, :yargy_rule, name}, compiled)
+            Map.put(acc, name, compiled)
+          end)
+
+        Enum.each(grammars_raw, fn {name, combinator} ->
+          compiled = build_rule(combinator, name, rule_map)
+          parser = Yargy.Parser.new(compiled)
+          :persistent_term.put({module, :yargy_parser, name}, parser)
+        end)
+
+        :persistent_term.put(init_key, true)
+        :ok
+    end
   end
 
   defp to_rule({:terminal, spec}, _rule_map) do
@@ -214,26 +244,16 @@ defmodule Yargy.Grammar do
     rules_raw = Module.get_attribute(env.module, :yargy_rules) |> Enum.reverse()
     grammars_raw = Module.get_attribute(env.module, :yargy_grammars) |> Enum.reverse()
 
-    # Build the rule map and parsers at compile time (in the compiler process).
-    # Closures (predicates) are created here and stored in persistent_term.
-    # The generated functions simply read from persistent_term.
-
-    rule_map =
-      Enum.reduce(rules_raw, %{}, fn %{name: name, combinator: combinator}, acc ->
-        compiled = Yargy.Grammar.build_rule(combinator, name, acc)
-        pt_key = {env.module, :yargy_rule, name}
-        :persistent_term.put(pt_key, compiled)
-        Map.put(acc, name, compiled)
-      end)
-
-    Enum.each(grammars_raw, fn %{name: name, combinator: combinator} ->
-      compiled = Yargy.Grammar.build_rule(combinator, name, rule_map)
-      parser = Yargy.Parser.new(compiled)
-      pt_key = {env.module, :yargy_parser, name}
-      :persistent_term.put(pt_key, parser)
+    rules_data = Enum.map(rules_raw, fn %{name: name, combinator: combinator} ->
+      {name, combinator}
     end)
 
-    # Now generate thin function wrappers that read from persistent_term.
+    grammars_data = Enum.map(grammars_raw, fn %{name: name, combinator: combinator} ->
+      {name, combinator}
+    end)
+
+    escaped_rules = Macro.escape(rules_data)
+    escaped_grammars = Macro.escape(grammars_data)
 
     rule_fns =
       Enum.map(rules_raw, fn %{name: name} ->
@@ -242,6 +262,7 @@ defmodule Yargy.Grammar do
         quote do
           @doc false
           def unquote(:"#{name}_rule")() do
+            Yargy.Grammar.init_module(__MODULE__)
             :persistent_term.get(unquote(pt_key))
           end
         end
@@ -254,6 +275,7 @@ defmodule Yargy.Grammar do
         quote do
           @doc "Returns the pre-built parser for `#{unquote(name)}`."
           def unquote(:"#{name}_parser")() do
+            Yargy.Grammar.init_module(__MODULE__)
             :persistent_term.get(unquote(pt_key))
           end
 
@@ -271,6 +293,11 @@ defmodule Yargy.Grammar do
       end)
 
     quote do
+      @doc false
+      def __yargy_rules__, do: unquote(escaped_rules)
+      @doc false
+      def __yargy_grammars__, do: unquote(escaped_grammars)
+
       unquote_splicing(rule_fns)
       unquote_splicing(grammar_fns)
     end
