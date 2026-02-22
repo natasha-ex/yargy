@@ -232,6 +232,62 @@ defmodule Yargy.Parser do
     end
   end
 
+  @doc """
+  Finds partial (incomplete) matches at the end of input.
+
+  When the input ends mid-parse, the Earley chart's last column contains
+  incomplete states — rules that matched some tokens but still expect more.
+  This is useful for autocomplete: you can tell what grammar the user is
+  in the middle of typing and how far they've gotten.
+
+  Returns a list of `%{rule_name, matched_tokens, matched_text, start, dot,
+  production_length, progress}` maps sorted by progress (most advanced first),
+  deduplicated by rule name.
+
+  ## Examples
+
+      iex> rule = Rule.rule([[Predicate.eq("ст"), Predicate.eq("."), Predicate.type(:int)]])
+      iex> parser = Parser.new(rule)
+      iex> [partial] = Parser.partial_matches(parser, Tokenizer.tokenize("ст."))
+      iex> partial.dot
+      2
+      iex> partial.production_length
+      3
+  """
+  def partial_matches(%{rule: rule}, tokens) when is_list(tokens) do
+    partial_matches(rule, tokens)
+  end
+
+  def partial_matches(%Rule{} = rule, tokens) when is_list(tokens) do
+    chart = parse(rule, tokens)
+    last_col = List.last(chart)
+
+    last_col
+    |> Column.all_states()
+    |> Enum.reject(&State.completed?/1)
+    |> Enum.filter(fn state -> state.dot > 0 end)
+    |> Enum.map(fn state ->
+      matched = Enum.slice(tokens, state.start..(length(chart) - 2)//1)
+
+      %{
+        rule_name: rule_label(state.rule),
+        dot: state.dot,
+        production_length: length(state.production.terms),
+        start: state.start,
+        matched_tokens: Enum.map(matched, & &1.value),
+        matched_text: Enum.map_join(matched, " ", & &1.value),
+        progress: state.dot / max(length(state.production.terms), 1)
+      }
+    end)
+    |> Enum.sort_by(& &1.progress, :desc)
+    |> Enum.uniq_by(& &1.rule_name)
+  end
+
+  defp rule_label(%Rule{name: name}) when is_binary(name), do: name
+  defp rule_label(%Rule{name: {:forward, name}}), do: name
+  defp rule_label(%Rule{name: nil}), do: nil
+  defp rule_label(%Rule{name: name}), do: inspect(name)
+
   defp parse(rule, tokens) do
     token_array = List.to_tuple(tokens)
     size = tuple_size(token_array) + 1

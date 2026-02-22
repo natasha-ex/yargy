@@ -55,6 +55,32 @@ tokens = Yargy.Tokenizer.tokenize("Договор от 15.03.2024 подписа
 matches = Yargy.Parser.findall(date, tokens)
 ```
 
+### Partial matching (autocomplete)
+
+When the input ends mid-parse, `partial_matches/2` returns incomplete states
+from the Earley chart — rules that matched some tokens but expect more.
+Use this for autocomplete: detect what grammar the user is typing and how far
+they've gotten.
+
+```elixir
+alias Yargy.{Parser, Predicate, Rule, Tokenizer}
+
+rule = Rule.rule([
+  Predicate.in_(~w(ООО ПАО АО)),
+  Predicate.or_([Predicate.eq("«"), Predicate.eq("\"")]),
+  Predicate.type(:word),
+  Predicate.or_([Predicate.eq("»"), Predicate.eq("\"")])
+])
+
+parser = Parser.new(rule)
+tokens = Tokenizer.tokenize("Директору ООО «Ромашка")
+
+Parser.partial_matches(parser, tokens)
+# [%{rule_name: nil, dot: 3, production_length: 4, progress: 0.75,
+#    matched_text: "ООО « Ромашка", matched_tokens: ["ООО", "«", "Ромашка"],
+#    start: 1}]
+```
+
 ### Sentence splitting
 
 ```elixir
@@ -66,7 +92,7 @@ Yargy.Sentenize.sentenize("Привет. Как дела? Хорошо!")
 
 | Module | Purpose |
 |---|---|
-| `Yargy.Parser` | Earley parser — `findall/2`, `find/2` |
+| `Yargy.Parser` | Earley parser — `findall/2`, `find/2`, `partial_matches/2` |
 | `Yargy.Rule` | Grammar DSL — `rule`, `or_rule`, `optional`, `repeatable`, `named` |
 | `Yargy.Predicate` | Token predicates — `gram`, `type`, `eq`, `in_`, `normalized`, `dictionary` |
 | `Yargy.Relations` | Agreement — `gnc_relation`, `nc_relation`, `number_relation` |
