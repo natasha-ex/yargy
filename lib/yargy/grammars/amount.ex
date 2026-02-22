@@ -9,7 +9,9 @@ defmodule Yargy.Grammars.Amount do
   - "100 000,00 руб."
   """
 
-  alias Yargy.{Parser, Predicate, Rule, Tokenizer}
+  use Yargy.Grammar
+
+  alias Yargy.{Parser, Tokenizer}
 
   @currency_words ~w(
     рублей рубля рубль руб
@@ -17,34 +19,23 @@ defmodule Yargy.Grammars.Amount do
     евро
   )
 
-  def parser do
-    Parser.new(amount_rule())
-  end
+  defrule :number, integer()
+  defrule :numbers, repeat(rule(:number))
+  defrule :kopecks, optional(token(",") ~> integer())
+  defrule :currency, caseless(@currency_words)
+  defrule :optional_dot, optional(token("."))
 
-  def amount_rule do
-    number = Rule.rule([Predicate.type(:int)])
-    space_separated_number = Rule.repeatable(number)
+  defgrammar :amount,
+    rule(:numbers) ~> rule(:kopecks) ~> rule(:currency) ~> rule(:optional_dot)
 
-    kopecks =
-      Rule.optional(
-        Rule.rule([
-          Predicate.eq(","),
-          Predicate.type(:int)
-        ])
-      )
+  def parser, do: amount_parser()
 
-    dot = Rule.optional(Rule.rule([Predicate.eq(".")]))
-
-    currency = Rule.rule([Predicate.in_caseless(@currency_words)])
-
-    Rule.rule([[space_separated_number, kopecks, currency, dot]])
-    |> Rule.named("Amount")
-  end
+  def amount_rule, do: amount_parser().rule
 
   @doc "Extracts monetary amounts from text."
   def extract(text) do
     tokens = Tokenizer.tokenize(text)
-    matches = Parser.findall(parser(), tokens)
+    matches = Parser.findall(amount_parser(), tokens)
     Enum.map(matches, &extract_amount/1)
   end
 

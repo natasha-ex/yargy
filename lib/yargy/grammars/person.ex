@@ -10,66 +10,32 @@ defmodule Yargy.Grammars.Person do
   - "И.П. Иванов"
   """
 
-  alias Yargy.{Parser, Pipeline, Predicate, Rule}
+  use Yargy.Grammar
 
-  def parser do
-    Parser.new(person_rule())
-  end
+  alias Yargy.{Parser, Pipeline}
 
-  def person_rule do
-    Rule.or_rule([
-      full_name_surn_first(),
-      full_name_name_first(),
-      initials_after_surname(),
-      initials_before_surname()
-    ])
-    |> Rule.named("Person")
-  end
+  defrule :surname, all([gram("Surn"), capitalized()])
+  defrule :first_name, all([gram("Name"), capitalized()])
+  defrule :patronymic, all([gram("Patr"), capitalized()])
+  defrule :dot, token(".")
+  defrule :initial, all([upper(), length_eq(1)])
+  defrule :initial_dot, rule(:initial) ~> rule(:dot)
 
-  defp surname,
-    do: Rule.rule([Predicate.and_(Predicate.gram("Surn"), Predicate.capitalized?())])
+  defgrammar :person, choice([
+    rule(:surname) ~> rule(:first_name) ~> optional(rule(:patronymic)),
+    rule(:first_name) ~> optional(rule(:patronymic)) ~> rule(:surname),
+    rule(:surname) ~> rule(:initial_dot) ~> rule(:initial_dot),
+    rule(:initial_dot) ~> rule(:initial_dot) ~> rule(:surname)
+  ])
 
-  defp first_name,
-    do: Rule.rule([Predicate.and_(Predicate.gram("Name"), Predicate.capitalized?())])
+  def parser, do: person_parser()
 
-  defp patronymic,
-    do: Rule.rule([Predicate.and_(Predicate.gram("Patr"), Predicate.capitalized?())])
-
-  defp dot, do: Rule.rule([Predicate.eq(".")])
-
-  defp initial do
-    Rule.rule([
-      Predicate.and_([
-        Predicate.type(:word),
-        Predicate.upper?(),
-        Predicate.length_eq(1)
-      ])
-    ])
-  end
-
-  defp initial_with_dot, do: Rule.rule([[initial(), dot()]])
-  defp optional_patronymic, do: Rule.optional(patronymic())
-
-  defp full_name_surn_first do
-    Rule.rule([[surname(), first_name(), optional_patronymic()]])
-  end
-
-  defp full_name_name_first do
-    Rule.rule([[first_name(), optional_patronymic(), surname()]])
-  end
-
-  defp initials_after_surname do
-    Rule.rule([[surname(), initial_with_dot(), initial_with_dot()]])
-  end
-
-  defp initials_before_surname do
-    Rule.rule([[initial_with_dot(), initial_with_dot(), surname()]])
-  end
+  def person_rule, do: person_parser().rule
 
   @doc "Extracts person names from text using morphological analysis."
   def extract(text) do
     tokens = Pipeline.morph_tokenize(text)
-    matches = Parser.findall(parser(), tokens)
+    matches = Parser.findall(person_parser(), tokens)
     Enum.map(matches, &extract_person/1)
   end
 
