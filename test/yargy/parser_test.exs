@@ -108,7 +108,9 @@ defmodule Yargy.ParserTest do
     end
 
     test "progress is a fraction of matched/total" do
-      rule = Rule.rule([Predicate.eq("a"), Predicate.eq("b"), Predicate.eq("c"), Predicate.eq("d")])
+      rule =
+        Rule.rule([Predicate.eq("a"), Predicate.eq("b"), Predicate.eq("c"), Predicate.eq("d")])
+
       parser = Parser.new(rule)
       tokens = Tokenizer.tokenize("a b")
 

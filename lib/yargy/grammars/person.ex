@@ -14,19 +14,22 @@ defmodule Yargy.Grammars.Person do
 
   alias Yargy.{Parser, Pipeline}
 
-  defrule :surname, all([gram("Surn"), capitalized()])
-  defrule :first_name, all([gram("Name"), capitalized()])
-  defrule :patronymic, all([gram("Patr"), capitalized()])
-  defrule :dot, token(".")
-  defrule :initial, all([upper(), length_eq(1)])
-  defrule :initial_dot, rule(:initial) ~> rule(:dot)
+  defrule(:surname, all([gram("Surn"), capitalized()]))
+  defrule(:first_name, all([gram("Name"), capitalized()]))
+  defrule(:patronymic, all([gram("Patr"), capitalized()]))
+  defrule(:dot, token("."))
+  defrule(:initial, all([upper(), length_eq(1)]))
+  defrule(:initial_dot, rule(:initial) ~> rule(:dot))
 
-  defgrammar :person, choice([
-    rule(:surname) ~> rule(:first_name) ~> optional(rule(:patronymic)),
-    rule(:first_name) ~> optional(rule(:patronymic)) ~> rule(:surname),
-    rule(:surname) ~> rule(:initial_dot) ~> rule(:initial_dot),
-    rule(:initial_dot) ~> rule(:initial_dot) ~> rule(:surname)
-  ])
+  defgrammar(
+    :person,
+    choice([
+      rule(:surname) ~> rule(:first_name) ~> optional(rule(:patronymic)),
+      rule(:first_name) ~> optional(rule(:patronymic)) ~> rule(:surname),
+      rule(:surname) ~> rule(:initial_dot) ~> rule(:initial_dot),
+      rule(:initial_dot) ~> rule(:initial_dot) ~> rule(:surname)
+    ])
+  )
 
   def parser, do: person_parser()
 

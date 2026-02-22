@@ -19,14 +19,16 @@ defmodule Yargy.Grammars.Amount do
     евро
   )
 
-  defrule :number, integer()
-  defrule :numbers, repeat(rule(:number))
-  defrule :kopecks, optional(token(",") ~> integer())
-  defrule :currency, caseless(@currency_words)
-  defrule :optional_dot, optional(token("."))
+  defrule(:number, integer())
+  defrule(:numbers, repeat(rule(:number)))
+  defrule(:kopecks, optional(token(",") ~> integer()))
+  defrule(:currency, caseless(@currency_words))
+  defrule(:optional_dot, optional(token(".")))
 
-  defgrammar :amount,
+  defgrammar(
+    :amount,
     rule(:numbers) ~> rule(:kopecks) ~> rule(:currency) ~> rule(:optional_dot)
+  )
 
   def parser, do: amount_parser()
 

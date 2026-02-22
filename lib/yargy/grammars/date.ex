@@ -14,31 +14,58 @@ defmodule Yargy.Grammars.Date do
   alias Yargy.{Parser, Tokenizer}
 
   @months_nominative %{
-    "январь" => 1, "февраль" => 2, "март" => 3, "апрель" => 4,
-    "май" => 5, "июнь" => 6, "июль" => 7, "август" => 8,
-    "сентябрь" => 9, "октябрь" => 10, "ноябрь" => 11, "декабрь" => 12
+    "январь" => 1,
+    "февраль" => 2,
+    "март" => 3,
+    "апрель" => 4,
+    "май" => 5,
+    "июнь" => 6,
+    "июль" => 7,
+    "август" => 8,
+    "сентябрь" => 9,
+    "октябрь" => 10,
+    "ноябрь" => 11,
+    "декабрь" => 12
   }
 
   @months_genitive %{
-    "января" => 1, "февраля" => 2, "марта" => 3, "апреля" => 4,
-    "мая" => 5, "июня" => 6, "июля" => 7, "августа" => 8,
-    "сентября" => 9, "октября" => 10, "ноября" => 11, "декабря" => 12
+    "января" => 1,
+    "февраля" => 2,
+    "марта" => 3,
+    "апреля" => 4,
+    "мая" => 5,
+    "июня" => 6,
+    "июля" => 7,
+    "августа" => 8,
+    "сентября" => 9,
+    "октября" => 10,
+    "ноября" => 11,
+    "декабря" => 12
   }
 
   @all_month_forms Map.merge(@months_nominative, @months_genitive)
 
-  defrule :day, all([integer(), lte(31)])
-  defrule :dot, token(".")
-  defrule :month_num, all([integer(), lte(12)])
-  defrule :year, all([integer(), gte(1900)])
-  defrule :year_suffix, optional(caseless(~w[г года г.]))
-  defrule :month_name, caseless(Map.keys(@all_month_forms))
+  defrule(:day, all([integer(), lte(31)]))
+  defrule(:dot, token("."))
+  defrule(:month_num, all([integer(), lte(12)]))
+  defrule(:year, all([integer(), gte(1900)]))
+  defrule(:year_suffix, optional(caseless(~w[г года г.])))
+  defrule(:month_name, caseless(Map.keys(@all_month_forms)))
 
-  defgrammar :dot_date,
-    rule(:day) ~> rule(:dot) ~> rule(:month_num) ~> rule(:dot) ~> rule(:year) ~> rule(:year_suffix)
+  defgrammar(
+    :dot_date,
+    rule(:day)
+    ~> rule(:dot)
+    ~> rule(:month_num)
+    ~> rule(:dot)
+    ~> rule(:year)
+    ~> rule(:year_suffix)
+  )
 
-  defgrammar :written_date,
+  defgrammar(
+    :written_date,
     rule(:day) ~> rule(:month_name) ~> rule(:year) ~> rule(:year_suffix)
+  )
 
   def parser do
     Parser.new(date_rule())

@@ -137,7 +137,9 @@ defmodule Yargy.Grammar do
     key = {module, :yargy_initialized}
 
     case :persistent_term.get(key, false) do
-      true -> :ok
+      true ->
+        :ok
+
       false ->
         module.__yargy_init__()
         :persistent_term.put(key, true)
@@ -258,12 +260,36 @@ defmodule Yargy.Grammar do
     quote do
       import Yargy.Grammar,
         only: [
-          token: 1, lemma: 1, gram: 1, integer: 0, word: 0, punct: 1,
-          capitalized: 0, upper: 0, lower: 0, length_eq: 1, gte: 1, lte: 1,
-          caseless: 1, all: 1, any: 1, pred: 1, rule: 1, choice: 1, optional: 1,
-          repeat: 1, repeat: 2, defrule: 2, defgrammar: 2,
-          any_token: 1, no_token: 1, first_token: 1, all_of: 1, any_of: 1,
-          max_words: 1, defmatch: 2
+          token: 1,
+          lemma: 1,
+          gram: 1,
+          integer: 0,
+          word: 0,
+          punct: 1,
+          capitalized: 0,
+          upper: 0,
+          lower: 0,
+          length_eq: 1,
+          gte: 1,
+          lte: 1,
+          caseless: 1,
+          all: 1,
+          any: 1,
+          pred: 1,
+          rule: 1,
+          choice: 1,
+          optional: 1,
+          repeat: 1,
+          repeat: 2,
+          defrule: 2,
+          defgrammar: 2,
+          any_token: 1,
+          no_token: 1,
+          first_token: 1,
+          all_of: 1,
+          any_of: 1,
+          max_words: 1,
+          defmatch: 2
         ]
 
       import Yargy.Grammar.Operators, only: [~>: 2]
@@ -421,11 +447,33 @@ defmodule Yargy.Grammar do
       def __yargy_init__ do
         import Yargy.Grammar,
           only: [
-            token: 1, lemma: 1, gram: 1, integer: 0, word: 0, punct: 1,
-            capitalized: 0, upper: 0, lower: 0, length_eq: 1, gte: 1, lte: 1,
-            caseless: 1, all: 1, any: 1, pred: 1, rule: 1, choice: 1, optional: 1,
-            repeat: 1, repeat: 2, any_token: 1, no_token: 1, first_token: 1,
-            all_of: 1, any_of: 1, max_words: 1
+            token: 1,
+            lemma: 1,
+            gram: 1,
+            integer: 0,
+            word: 0,
+            punct: 1,
+            capitalized: 0,
+            upper: 0,
+            lower: 0,
+            length_eq: 1,
+            gte: 1,
+            lte: 1,
+            caseless: 1,
+            all: 1,
+            any: 1,
+            pred: 1,
+            rule: 1,
+            choice: 1,
+            optional: 1,
+            repeat: 1,
+            repeat: 2,
+            any_token: 1,
+            no_token: 1,
+            first_token: 1,
+            all_of: 1,
+            any_of: 1,
+            max_words: 1
           ]
 
         import Yargy.Grammar.Operators, only: [~>: 2]
