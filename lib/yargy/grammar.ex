@@ -65,7 +65,7 @@ defmodule Yargy.Grammar do
   alias Yargy.{Predicate, Rule}
 
   # --- Combinator constructors ---
-  # These return plain tuples (serializable, no closures).
+  # These return plain tuples (serializable, no closures — except `pred`).
 
   def token(value) when is_binary(value), do: {:terminal, {:eq, value}}
   def token(values) when is_list(values), do: {:terminal, {:in, values}}
@@ -118,31 +118,14 @@ defmodule Yargy.Grammar do
   end
 
   @doc false
-  def init_module(module) do
-    init_key = {module, :yargy_initialized}
+  def ensure_initialized(module) do
+    key = {module, :yargy_initialized}
 
-    case :persistent_term.get(init_key, false) do
-      true ->
-        :ok
-
+    case :persistent_term.get(key, false) do
+      true -> :ok
       false ->
-        rules_raw = module.__yargy_rules__()
-        grammars_raw = module.__yargy_grammars__()
-
-        rule_map =
-          Enum.reduce(rules_raw, %{}, fn {name, combinator}, acc ->
-            compiled = build_rule(combinator, name, acc)
-            :persistent_term.put({module, :yargy_rule, name}, compiled)
-            Map.put(acc, name, compiled)
-          end)
-
-        Enum.each(grammars_raw, fn {name, combinator} ->
-          compiled = build_rule(combinator, name, rule_map)
-          parser = Yargy.Parser.new(compiled)
-          :persistent_term.put({module, :yargy_parser, name}, parser)
-        end)
-
-        :persistent_term.put(init_key, true)
+        module.__yargy_init__()
+        :persistent_term.put(key, true)
         :ok
     end
   end
@@ -229,14 +212,20 @@ defmodule Yargy.Grammar do
   end
 
   defmacro defrule(name, combinator) do
+    # Store the combinator AST (not the evaluated value) so it can be
+    # re-evaluated in __yargy_init__/0 at runtime.
+    escaped_combinator = Macro.escape(combinator)
+
     quote do
-      @yargy_rules %{name: unquote(name), combinator: unquote(combinator)}
+      @yargy_rules %{name: unquote(name), combinator_ast: unquote(escaped_combinator)}
     end
   end
 
   defmacro defgrammar(name, combinator) do
+    escaped_combinator = Macro.escape(combinator)
+
     quote do
-      @yargy_grammars %{name: unquote(name), combinator: unquote(combinator)}
+      @yargy_grammars %{name: unquote(name), combinator_ast: unquote(escaped_combinator)}
     end
   end
 
@@ -244,16 +233,31 @@ defmodule Yargy.Grammar do
     rules_raw = Module.get_attribute(env.module, :yargy_rules) |> Enum.reverse()
     grammars_raw = Module.get_attribute(env.module, :yargy_grammars) |> Enum.reverse()
 
-    rules_data = Enum.map(rules_raw, fn %{name: name, combinator: combinator} ->
-      {name, combinator}
-    end)
+    # Generate __yargy_init__/0 that rebuilds all rules and parsers.
+    # Combinator ASTs are unquoted here, so `pred(fn ... end)` closures are
+    # re-created as real code — no Macro.escape of functions needed.
 
-    grammars_data = Enum.map(grammars_raw, fn %{name: name, combinator: combinator} ->
-      {name, combinator}
-    end)
+    init_body =
+      Enum.map(rules_raw, fn %{name: name, combinator_ast: combinator_ast} ->
+        pt_key = Macro.escape({env.module, :yargy_rule, name})
 
-    escaped_rules = Macro.escape(rules_data)
-    escaped_grammars = Macro.escape(grammars_data)
+        quote do
+          compiled = Yargy.Grammar.build_rule(unquote(combinator_ast), unquote(name), rule_map)
+          :persistent_term.put(unquote(pt_key), compiled)
+          rule_map = Map.put(rule_map, unquote(name), compiled)
+        end
+      end)
+
+    init_grammars =
+      Enum.map(grammars_raw, fn %{name: name, combinator_ast: combinator_ast} ->
+        pt_key = Macro.escape({env.module, :yargy_parser, name})
+
+        quote do
+          compiled = Yargy.Grammar.build_rule(unquote(combinator_ast), unquote(name), rule_map)
+          parser = Yargy.Parser.new(compiled)
+          :persistent_term.put(unquote(pt_key), parser)
+        end
+      end)
 
     rule_fns =
       Enum.map(rules_raw, fn %{name: name} ->
@@ -262,7 +266,7 @@ defmodule Yargy.Grammar do
         quote do
           @doc false
           def unquote(:"#{name}_rule")() do
-            Yargy.Grammar.init_module(__MODULE__)
+            Yargy.Grammar.ensure_initialized(__MODULE__)
             :persistent_term.get(unquote(pt_key))
           end
         end
@@ -275,7 +279,7 @@ defmodule Yargy.Grammar do
         quote do
           @doc "Returns the pre-built parser for `#{unquote(name)}`."
           def unquote(:"#{name}_parser")() do
-            Yargy.Grammar.init_module(__MODULE__)
+            Yargy.Grammar.ensure_initialized(__MODULE__)
             :persistent_term.get(unquote(pt_key))
           end
 
@@ -294,9 +298,22 @@ defmodule Yargy.Grammar do
 
     quote do
       @doc false
-      def __yargy_rules__, do: unquote(escaped_rules)
-      @doc false
-      def __yargy_grammars__, do: unquote(escaped_grammars)
+      def __yargy_init__ do
+        import Yargy.Grammar,
+          only: [
+            token: 1, lemma: 1, gram: 1, integer: 0, word: 0, punct: 1,
+            capitalized: 0, upper: 0, lower: 0, length_eq: 1, gte: 1, lte: 1,
+            caseless: 1, all: 1, any: 1, pred: 1, rule: 1, choice: 1, optional: 1,
+            repeat: 1, repeat: 2
+          ]
+
+        import Yargy.Grammar.Operators, only: [~>: 2]
+
+        rule_map = %{}
+        unquote_splicing(init_body)
+        unquote_splicing(init_grammars)
+        :ok
+      end
 
       unquote_splicing(rule_fns)
       unquote_splicing(grammar_fns)
