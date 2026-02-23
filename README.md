@@ -22,6 +22,40 @@ def deps do
 end
 ```
 
+## Performance
+
+Benchmarked on real Russian legal text (2.5 KB medium, 18.5 KB long). Person grammar extracts
+full names with patronymics in four patterns (Surname+Name+Patronymic, initials, etc.).
+
+**End-to-end: text → extracted matches** (tokenize + morph tag + parse):
+
+| Grammar | Text | Python yargy 0.16 | Elixir yargy | Speedup |
+|---|---|---|---|---|
+| Person | short (81 chars) | 213 µs | 291 µs | 0.7× |
+| Person | medium (2.5 KB) | 8.3 ms | 7.7 ms | **1.1×** |
+| Person | long (18.5 KB) | 60 ms | 42 ms | **1.4×** |
+| Date | short | 171 µs | 97 µs | **1.8×** |
+| Date | medium | 3.7 ms | 2.4 ms | **1.5×** |
+| Date | long | 29 ms | 18 ms | **1.6×** |
+| Amount | short | 133 µs | 64 µs | **2.1×** |
+| Amount | medium | 4.3 ms | 2.0 ms | **2.2×** |
+| Amount | long | 27 ms | 15 ms | **1.8×** |
+
+**Component breakdown** (long text, 18.5 KB, ~3600 tokens):
+
+| Component | Python | Elixir | Speedup |
+|---|---|---|---|
+| Tokenize + morph tag | 2.6 ms | 5.3 ms | 0.5× |
+| Sentenize | 1.5 ms | 6.0 ms | 0.3× |
+| Parse only (Person) | ~57 ms | 39 ms | **1.5×** |
+
+Python's tokenizer is backed by C-compiled regex + pymorphy2's DAWG in C,
+giving it an edge on raw tokenization. The Elixir port wins on the parser core where
+Earley chart operations dominate — tuple-based O(1) term access, integer rule IDs
+for fast dedup, and prediction caching reduce constant factors.
+
+Run benchmarks: `mix run bench/parser_bench.exs` (Elixir), `python3 bench/python_bench.py` (Python).
+
 ## Grammar DSL
 
 Define grammars declaratively with `use Yargy.Grammar`. Rules compile

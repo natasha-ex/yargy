@@ -102,9 +102,21 @@ Bench.measure("amount_parse(medium)", fn -> Parser.findall(amount_parser, medium
 Bench.measure("amount_parse(long)", fn -> Parser.findall(amount_parser, long_tagged) end, 5)
 IO.puts("")
 
-IO.puts("--- End-to-end (text → matches) ---")
-Bench.measure("person_e2e(short)", fn -> Yargy.Grammars.Person.person_text(short_text) end, 100)
-Bench.measure("person_e2e(medium)", fn -> Yargy.Grammars.Person.person_text(medium_text) end, 10)
-Bench.measure("person_e2e(long)", fn -> Yargy.Grammars.Person.person_text(long_text) end, 3)
+IO.puts("--- End-to-end: Person (text → matches) ---")
+Bench.measure("person_e2e(short)", fn -> Yargy.Grammars.Person.person_text(short_text) end, 200)
+Bench.measure("person_e2e(medium)", fn -> Yargy.Grammars.Person.person_text(medium_text) end, 30)
+Bench.measure("person_e2e(long)", fn -> Yargy.Grammars.Person.person_text(long_text) end, 5)
+IO.puts("")
+
+IO.puts("--- End-to-end: Date (text → matches) ---")
+Bench.measure("date_e2e(short)", fn -> Yargy.Grammars.Date.extract(short_text) end, 200)
+Bench.measure("date_e2e(medium)", fn -> Yargy.Grammars.Date.extract(medium_text) end, 30)
+Bench.measure("date_e2e(long)", fn -> Yargy.Grammars.Date.extract(long_text) end, 5)
+IO.puts("")
+
+IO.puts("--- End-to-end: Amount (text → matches) ---")
+Bench.measure("amount_e2e(short)", fn -> Yargy.Grammars.Amount.extract(short_text) end, 200)
+Bench.measure("amount_e2e(medium)", fn -> Yargy.Grammars.Amount.extract(medium_text) end, 30)
+Bench.measure("amount_e2e(long)", fn -> Yargy.Grammars.Amount.extract(long_text) end, 5)
 
 IO.puts("\n=== Done ===")
