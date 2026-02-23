@@ -17,7 +17,7 @@ Elixir port of [natasha/yargy](https://github.com/natasha/yargy). Depends on [mo
 ```elixir
 def deps do
   [
-    {:yargy, "~> 0.4"}
+    {:yargy, "~> 0.5"}
   ]
 end
 ```
