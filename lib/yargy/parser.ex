@@ -320,15 +320,13 @@ defmodule Yargy.Parser do
         :array.set(i, Column.new(i, token), cols)
       end)
 
-    prod_ids = precompute_prod_ids(rule)
-
     columns =
       Enum.reduce(0..(size - 1), columns, fn i, cols ->
         col = :array.get(i, cols)
 
         col =
           Enum.reduce(rule.productions, col, fn prod, col ->
-            prod_id = Map.fetch!(prod_ids, :erlang.phash2(prod))
+            prod_id = {rule_id, :erlang.phash2(prod)}
             state = State.new(rule, rule_id, prod, prod_id, start: i, stop: i)
             Column.add(col, state)
           end)
@@ -338,38 +336,6 @@ defmodule Yargy.Parser do
       end)
 
     columns
-  end
-
-  defp precompute_prod_ids(rule) do
-    all_rules = collect_rules(rule, %{})
-
-    all_rules
-    |> Map.values()
-    |> Enum.flat_map(fn r -> Enum.map(r.productions, &{:erlang.phash2(&1), {:erlang.phash2(r), :erlang.phash2(&1)}}) end)
-    |> Map.new()
-  end
-
-  defp collect_rules(%Rule{} = rule, seen) do
-    rule_id = :erlang.phash2(rule)
-
-    if Map.has_key?(seen, rule_id) do
-      seen
-    else
-      seen = Map.put(seen, rule_id, rule)
-
-      Enum.reduce(rule.productions, seen, fn prod, seen ->
-        Enum.reduce(prod.terms, seen, fn
-          %Rule{name: {:forward, _}} = fwd, seen ->
-            collect_rules(Rule.resolve_forward(fwd), seen)
-
-          %Rule{} = r, seen ->
-            collect_rules(r, seen)
-
-          _, seen ->
-            seen
-        end)
-      end)
-    end
   end
 
   defp process_column(col, cols, col_index, size) do
