@@ -1,72 +1,125 @@
 defmodule Yargy.Tokenizer do
   @moduledoc """
   Tokenizer that produces Yargy tokens with type and position information.
+
+  Single-pass byte scanner — classifies each byte/codepoint and groups
+  consecutive characters of the same class into tokens.
   """
 
   alias Yargy.Token
 
-  @word_re ~r/[А-Яа-яЁёA-Za-z]+/u
-  @int_re ~r/[0-9]+/
-  @punct_re ~r/[^\s\w]/u
-
   @doc "Tokenizes text into a list of Yargy tokens with positions."
-  def tokenize(text) do
+  def tokenize(text) when is_binary(text) do
     scan(text, 0, [])
-    |> Enum.reverse()
   end
 
-  defp scan("", _pos, acc), do: acc
+  defp scan(<<>>, _pos, acc), do: Enum.reverse(acc)
 
   defp scan(text, pos, acc) do
-    case match_whitespace(text) do
-      {match, byte_len} ->
-        char_len = String.length(match)
-        rest = binary_part(text, byte_len, byte_size(text) - byte_len)
+    case classify_first(text) do
+      {:space, rest, byte_len} ->
+        char_len = codepoint_count(text, byte_len)
         scan(rest, pos + char_len, acc)
 
-      nil ->
-        scan_token(text, pos, acc)
-    end
-  end
-
-  defp scan_token(text, pos, acc) do
-    case match_token(text) do
-      {match, byte_len, type} ->
-        char_len = String.length(match)
-        token = Token.new(match, type, pos, pos + char_len)
-        rest = binary_part(text, byte_len, byte_size(text) - byte_len)
+      {:word, _rest, _byte_len} ->
+        {value, rest, _byte_len} = consume_while(text, :word)
+        char_len = String.length(value)
+        token = Token.new(value, :word, pos, pos + char_len)
         scan(rest, pos + char_len, [token | acc])
 
-      nil ->
-        <<_::utf8, rest::binary>> = text
+      {:digit, _rest, _byte_len} ->
+        {value, rest, byte_len} = consume_while(text, :digit)
+        char_len = byte_len
+        token = Token.new(value, :int, pos, pos + char_len)
+        scan(rest, pos + char_len, [token | acc])
+
+      {:punct, rest, byte_len} ->
+        value = binary_part(text, 0, byte_len)
+        token = Token.new(value, :punct, pos, pos + 1)
+        scan(rest, pos + 1, [token | acc])
+
+      {:other, rest, _byte_len} ->
         scan(rest, pos + 1, acc)
     end
   end
 
-  defp match_whitespace(text) do
-    case Regex.run(~r/\A\s+/u, text, return: :index) do
-      [{0, byte_len} | _] -> {binary_part(text, 0, byte_len), byte_len}
-      _ -> nil
+  defp consume_while(text, class) do
+    consume_while(text, class, 0)
+  end
+
+  defp consume_while(text, class, byte_offset) do
+    rest = binary_part(text, byte_offset, byte_size(text) - byte_offset)
+
+    case classify_first(rest) do
+      {^class, _rest, byte_len} ->
+        consume_while(text, class, byte_offset + byte_len)
+
+      _ ->
+        value = binary_part(text, 0, byte_offset)
+        rest = binary_part(text, byte_offset, byte_size(text) - byte_offset)
+        {value, rest, byte_offset}
     end
   end
 
-  defp match_token(text) do
-    match_typed(text, @word_re, :word) ||
-      match_typed(text, @int_re, :int) ||
-      match_typed(text, @punct_re, :punct)
-  end
+  # Cyrillic block: А-я (U+0410..U+044F), Ё (U+0401), ё (U+0451)
+  # Latin: A-Z (0x41..0x5A), a-z (0x61..0x7A)
 
-  defp match_typed(text, re, type) do
-    case match_re(re, text) do
-      {match, byte_len} -> {match, byte_len, type}
-      nil -> nil
+  defp classify_first(<<>>), do: nil
+
+  # ASCII fast path
+  defp classify_first(<<c, rest::binary>>) when c in ?A..?Z or c in ?a..?z,
+    do: {:word, rest, 1}
+
+  defp classify_first(<<c, rest::binary>>) when c in ?0..?9,
+    do: {:digit, rest, 1}
+
+  defp classify_first(<<c, rest::binary>>) when c in [?\s, ?\t, ?\n, ?\r],
+    do: {:space, rest, 1}
+
+  # 2-byte UTF-8 Cyrillic (U+0401 Ё, U+0410..U+044F А-я, U+0451 ё)
+  defp classify_first(<<0xD0, b, rest::binary>>) when b in 0x90..0xBF,
+    do: {:word, rest, 2}
+
+  defp classify_first(<<0xD1, b, rest::binary>>) when b in 0x80..0x8F,
+    do: {:word, rest, 2}
+
+  # Ё = D0 81, ё = D1 91
+  defp classify_first(<<0xD0, 0x81, rest::binary>>), do: {:word, rest, 2}
+  defp classify_first(<<0xD1, 0x91, rest::binary>>), do: {:word, rest, 2}
+
+  # Whitespace: non-breaking space, other Unicode whitespace
+  defp classify_first(<<0xC2, 0xA0, rest::binary>>), do: {:space, rest, 2}
+
+  # General UTF-8: check if it's a letter
+  defp classify_first(<<c::utf8, rest::binary>>) when c > 127 do
+    byte_len = byte_size(<<c::utf8>>)
+
+    cond do
+      unicode_letter?(c) -> {:word, rest, byte_len}
+      unicode_space?(c) -> {:space, rest, byte_len}
+      true -> {:punct, rest, byte_len}
     end
   end
 
-  defp match_re(re, text) do
-    case Regex.run(re, text, return: :index) do
-      [{0, byte_len} | _] -> {binary_part(text, 0, byte_len), byte_len}
-      _ -> nil
-    end
+  # ASCII punctuation (anything else that's not whitespace/letter/digit)
+  defp classify_first(<<_c, rest::binary>>), do: {:punct, rest, 1}
+
+  defp unicode_letter?(c) do
+    # Covers Latin extended, Cyrillic extended, Greek, etc.
+    (c >= 0x00C0 and c <= 0x024F) or
+      (c >= 0x0400 and c <= 0x04FF) or
+      (c >= 0x0370 and c <= 0x03FF) or
+      (c >= 0x0500 and c <= 0x052F) or
+      (c >= 0x1E00 and c <= 0x1EFF)
+  end
+
+  defp unicode_space?(c) do
+    c in [0x00A0, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006,
+          0x2007, 0x2008, 0x2009, 0x200A, 0x200B, 0x2028, 0x2029, 0x202F,
+          0x205F, 0x3000, 0xFEFF]
+  end
+
+  defp codepoint_count(binary, byte_len) do
+    binary |> binary_part(0, byte_len) |> String.length()
   end
 end

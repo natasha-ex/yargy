@@ -13,12 +13,14 @@ defmodule Yargy.Sentenize do
   @generic_quotes String.graphemes("\"\u201E'")
   @close_brackets String.graphemes(")]}")
   @all_quotes MapSet.new(@close_quotes ++ @generic_quotes ++ String.graphemes("«\"\u2018"))
-  @smiles ~r/[=:;]-?[)(]{1,3}/
+  @smiles_re ~r/[=:;]-?[)(]{1,3}/
+  @smiles_right_re ~r/^\s*[=:;]-?[)(]{1,3}/u
 
   @delimiters_chars @endings ++ [";"] ++ @generic_quotes ++ @close_quotes ++ @close_brackets
+  @delimiters_set MapSet.new(@delimiters_chars)
   @delimiters_pattern Regex.compile!(
                         "(" <>
-                          Regex.source(@smiles) <>
+                          Regex.source(@smiles_re) <>
                           "|[" <> Regex.escape(Enum.join(@delimiters_chars)) <> "])",
                         "u"
                       )
@@ -76,12 +78,18 @@ defmodule Yargy.Sentenize do
 
   @initials MapSet.new(~w(дж ed вс))
 
-  @word_re ~r/([^\W\d]+|\d+)/u
   @first_token_re ~r/^\s*([^\W\d]+|\d+|[^\w\s])/u
   @last_token_re ~r/([^\W\d]+|\d+|[^\w\s])\s*$/u
   @pair_sokr_re ~r/(\w)\s*\.\s*(\w)\s*$/u
   @token_re ~r/([^\W\d]+|\d+|[^\w\s])/u
   @roman_re ~r/^[IVXML]+$/u
+
+  @digit_re ~r/^\d+$/
+  @word_only_re ~r/^\w+$/u
+  @alpha_lower_re ~r/^[^\W\d]+$/u
+  @single_letter_re ~r/^\p{L}$/u
+  @space_start_re ~r/^\s/u
+  @space_end_re ~r/\s$/u
 
   @bullet_chars MapSet.new(~w(§ а б в г д е a b c d e f))
   @bullet_bounds MapSet.new(~w(. \)))
@@ -136,8 +144,8 @@ defmodule Yargy.Sentenize do
     delimiter = binary_part(text, start, len)
     stop = start + len
 
-    left = safe_slice_before(text, start, @window)
-    right = safe_slice_after(text, stop, @window)
+    left = slice_before(text, start, @window)
+    right = slice_after(text, stop, @window)
 
     split = %{left: left, delimiter: delimiter, right: right}
 
@@ -145,16 +153,66 @@ defmodule Yargy.Sentenize do
     build_parts(text, rest_matches, stop, acc)
   end
 
-  defp safe_slice_before(text, byte_pos, window) do
-    prefix = binary_part(text, 0, byte_pos)
-    chars = String.graphemes(prefix)
-    taken = Enum.take(chars, -window)
-    Enum.join(taken)
+  # Max bytes to scan for `window` graphemes (4 bytes/char * window + slack for grapheme clusters)
+  @max_scan_bytes @window * 4 + 8
+
+  defp slice_before(_text, 0, _window), do: ""
+
+  defp slice_before(text, byte_pos, window) do
+    # Only scan the tail of the prefix, not the whole thing
+    scan_start = max(0, byte_pos - @max_scan_bytes)
+    # Find a valid UTF-8 boundary
+    scan_start = utf8_boundary_forward(text, scan_start, byte_pos)
+    chunk = binary_part(text, scan_start, byte_pos - scan_start)
+
+    graphemes = String.graphemes(chunk)
+    len = length(graphemes)
+
+    if len <= window do
+      chunk
+    else
+      graphemes |> Enum.drop(len - window) |> IO.iodata_to_binary()
+    end
   end
 
-  defp safe_slice_after(text, byte_pos, window) do
-    suffix = binary_part(text, byte_pos, byte_size(text) - byte_pos)
-    suffix |> String.graphemes() |> Enum.take(window) |> Enum.join()
+  defp utf8_boundary_forward(_text, pos, limit) when pos >= limit, do: limit
+
+  defp utf8_boundary_forward(text, pos, limit) do
+    byte = :binary.at(text, pos)
+
+    if Bitwise.band(byte, 0xC0) == 0x80 do
+      utf8_boundary_forward(text, pos + 1, limit)
+    else
+      pos
+    end
+  end
+
+  defp slice_after(text, byte_pos, window) do
+    remaining = byte_size(text) - byte_pos
+
+    if remaining <= 0 do
+      ""
+    else
+      scan_len = min(remaining, @max_scan_bytes)
+      chunk = binary_part(text, byte_pos, scan_len)
+      # Ensure we don't cut in the middle of a codepoint
+      chunk = truncate_to_valid_utf8(chunk)
+
+      graphemes = String.graphemes(chunk)
+
+      if length(graphemes) <= window do
+        chunk
+      else
+        graphemes |> Enum.take(window) |> IO.iodata_to_binary()
+      end
+    end
+  end
+
+  defp truncate_to_valid_utf8(binary) do
+    case String.chunk(binary, :valid) do
+      [] -> ""
+      [first | _] -> first
+    end
   end
 
   defp join_by_rules(parts) do
@@ -188,43 +246,34 @@ defmodule Yargy.Sentenize do
   end
 
   defp should_join?(split) do
-    rules = [
-      &empty_side/1,
-      &no_space_prefix/1,
-      &lower_right/1,
-      &delimiter_right/1,
-      &sokr_left/1,
-      &inside_pair_sokr/1,
-      &initials_left/1,
-      &list_item/1,
-      &close_quote/1,
-      &close_bracket/1,
-      &dash_right/1
-    ]
-
-    Enum.find_value(rules, fn rule ->
-      case rule.(split) do
-        :join -> true
-        :split -> false
-        nil -> nil
-      end
-    end) || false
+    empty_side(split) ||
+      no_space_prefix(split) ||
+      lower_right(split) ||
+      delimiter_right(split) ||
+      sokr_left(split) ||
+      inside_pair_sokr(split) ||
+      initials_left(split) ||
+      list_item(split) ||
+      close_quote(split) ||
+      close_bracket(split) ||
+      dash_right(split) ||
+      false
   end
 
   defp empty_side(split) do
     lt = left_token(split.left)
     rt = right_token(split.right)
-    if lt == nil or rt == nil, do: :join
+    lt == nil or rt == nil
   end
 
   defp no_space_prefix(split) do
-    unless Regex.match?(~r/^\s/u, split.right), do: :join
+    not Regex.match?(@space_start_re, split.right)
   end
 
   defp lower_right(split) do
     case right_token(split.right) do
-      nil -> nil
-      t -> if lower_alpha?(t), do: :join
+      nil -> false
+      t -> lower_alpha?(t)
     end
   end
 
@@ -232,14 +281,14 @@ defmodule Yargy.Sentenize do
     rt = right_token(split.right)
 
     cond do
-      rt in @generic_quotes -> nil
-      rt != nil and rt in @delimiters_chars -> :join
-      Regex.match?(~r/^\s*#{Regex.source(@smiles)}/u, split.right) -> :join
-      true -> nil
+      rt != nil and MapSet.member?(MapSet.new(@generic_quotes), rt) -> false
+      rt != nil and MapSet.member?(@delimiters_set, rt) -> true
+      Regex.match?(@smiles_right_re, split.right) -> true
+      true -> false
     end
   end
 
-  defp sokr_left(%{delimiter: d}) when d != ".", do: nil
+  defp sokr_left(%{delimiter: d}) when d != ".", do: false
 
   defp sokr_left(split) do
     rt = right_token(split.right)
@@ -247,7 +296,7 @@ defmodule Yargy.Sentenize do
 
     cond do
       rt == nil or lt == nil ->
-        nil
+        false
 
       left_pair_sokr?(split.left) ->
         check_pair_sokr(split.left, lt, rt)
@@ -262,9 +311,9 @@ defmodule Yargy.Sentenize do
     pair = {String.downcase(a), String.downcase(b)}
 
     cond do
-      MapSet.member?(@head_pair_sokrs, pair) -> :join
-      MapSet.member?(@pair_sokrs, pair) and sokr_token?(rt) -> :join
-      MapSet.member?(@pair_sokrs, pair) -> nil
+      MapSet.member?(@head_pair_sokrs, pair) -> true
+      MapSet.member?(@pair_sokrs, pair) and sokr_token?(rt) -> true
+      MapSet.member?(@pair_sokrs, pair) -> false
       true -> check_single_sokr(lt, rt)
     end
   end
@@ -273,13 +322,13 @@ defmodule Yargy.Sentenize do
     left_lower = String.downcase(lt)
 
     cond do
-      MapSet.member?(@head_sokrs, left_lower) -> :join
-      MapSet.member?(@sokrs, left_lower) and sokr_token?(rt) -> :join
-      true -> nil
+      MapSet.member?(@head_sokrs, left_lower) -> true
+      MapSet.member?(@sokrs, left_lower) and sokr_token?(rt) -> true
+      true -> false
     end
   end
 
-  defp inside_pair_sokr(%{delimiter: d}) when d != ".", do: nil
+  defp inside_pair_sokr(%{delimiter: d}) when d != ".", do: false
 
   defp inside_pair_sokr(split) do
     lt = left_token(split.left)
@@ -287,27 +336,29 @@ defmodule Yargy.Sentenize do
 
     if lt && rt do
       pair = {String.downcase(lt), String.downcase(rt)}
-      if MapSet.member?(@pair_sokrs, pair), do: :join
+      MapSet.member?(@pair_sokrs, pair)
+    else
+      false
     end
   end
 
-  defp initials_left(%{delimiter: d}) when d != ".", do: nil
+  defp initials_left(%{delimiter: d}) when d != ".", do: false
 
   defp initials_left(split) do
     lt = left_token(split.left)
 
     cond do
       lt == nil ->
-        nil
+        false
 
-      String.length(lt) == 1 and Regex.match?(~r/^\p{L}$/u, lt) and String.upcase(lt) == lt ->
-        :join
+      String.length(lt) == 1 and Regex.match?(@single_letter_re, lt) and String.upcase(lt) == lt ->
+        true
 
       MapSet.member?(@initials, String.downcase(lt)) ->
-        :join
+        true
 
       true ->
-        nil
+        false
     end
   end
 
@@ -316,40 +367,46 @@ defmodule Yargy.Sentenize do
 
     cond do
       not MapSet.member?(@all_quotes, d) ->
-        nil
+        false
 
       d in @close_quotes ->
         close_bound(split)
 
       d in @generic_quotes ->
-        if Regex.match?(~r/\s$/u, split.left), do: :join, else: close_bound(split)
+        if Regex.match?(@space_end_re, split.left), do: true, else: close_bound(split)
 
       true ->
-        nil
+        false
     end
   end
 
   defp close_bracket(split) do
     if split.delimiter in @close_brackets do
       close_bound(split)
+    else
+      false
     end
   end
 
   defp close_bound(split) do
     lt = left_token(split.left)
-    if lt && lt in @endings, do: nil, else: :join
+    not (lt != nil and lt in @endings)
   end
 
   defp list_item(split) do
     if MapSet.member?(@bullet_bounds, split.delimiter) do
       check_bullet_buffer(split.buffer || "")
+    else
+      false
     end
   end
 
   defp check_bullet_buffer(buffer) do
     if String.length(buffer) <= @bullet_size do
       buffer_tokens = Regex.scan(@token_re, buffer) |> Enum.map(&hd/1)
-      if Enum.all?(buffer_tokens, &bullet?/1), do: :join
+      Enum.all?(buffer_tokens, &bullet?/1)
+    else
+      false
     end
   end
 
@@ -358,7 +415,9 @@ defmodule Yargy.Sentenize do
 
     if rt && rt in @dashes do
       rw = right_word(split.right)
-      if rw && lower_alpha?(rw), do: :join
+      rw != nil and lower_alpha?(rw)
+    else
+      false
     end
   end
 
@@ -377,8 +436,8 @@ defmodule Yargy.Sentenize do
   end
 
   defp right_word(text) do
-    case Regex.run(@word_re, text) do
-      [_, word] -> word
+    case Regex.run(@first_token_re, text) do
+      [_, word] -> if Regex.match?(@alpha_lower_re, word), do: word
       _ -> nil
     end
   end
@@ -394,8 +453,8 @@ defmodule Yargy.Sentenize do
 
   defp sokr_token?(token) do
     cond do
-      Regex.match?(~r/^\d+$/, token) -> true
-      not Regex.match?(~r/^\w+$/u, token) -> true
+      Regex.match?(@digit_re, token) -> true
+      not Regex.match?(@word_only_re, token) -> true
       String.downcase(token) == token -> true
       true -> false
     end
@@ -403,7 +462,7 @@ defmodule Yargy.Sentenize do
 
   defp bullet?(token) do
     cond do
-      Regex.match?(~r/^\d+$/, token) -> true
+      Regex.match?(@digit_re, token) -> true
       MapSet.member?(@bullet_bounds, token) -> true
       MapSet.member?(@bullet_chars, String.downcase(token)) -> true
       Regex.match?(@roman_re, token) -> true
@@ -412,7 +471,7 @@ defmodule Yargy.Sentenize do
   end
 
   defp lower_alpha?(token) do
-    Regex.match?(~r/^[^\W\d]+$/u, token) and String.downcase(token) == token
+    Regex.match?(@alpha_lower_re, token) and String.downcase(token) == token
   end
 
   defp find_substrings(chunks, text) do

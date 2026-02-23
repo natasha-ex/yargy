@@ -19,43 +19,48 @@ defmodule Yargy.Parser do
   defmodule State do
     @moduledoc false
 
-    @enforce_keys [:rule, :production, :dot, :start, :stop]
-    defstruct [:rule, :production, :dot, :start, :stop, children: []]
+    @enforce_keys [:rule, :rule_id, :production, :prod_id, :terms, :term_count, :dot, :start, :stop]
+    defstruct [
+      :rule, :rule_id, :production, :prod_id,
+      :terms, :term_count,
+      :dot, :start, :stop,
+      children: []
+    ]
 
-    def new(rule, production, opts \\ []) do
+    def new(rule, rule_id, production, prod_id, opts \\ []) do
+      terms = List.to_tuple(production.terms)
+      dot = opts[:dot] || 0
       %__MODULE__{
         rule: rule,
+        rule_id: rule_id,
         production: production,
-        dot: opts[:dot] || 0,
+        prod_id: prod_id,
+        terms: terms,
+        term_count: tuple_size(terms),
+        dot: dot,
         start: opts[:start] || 0,
         stop: opts[:stop] || 0,
         children: opts[:children] || []
       }
     end
 
-    def completed?(%__MODULE__{dot: dot, production: prod}) do
-      dot >= length(prod.terms)
-    end
+    def completed?(%__MODULE__{dot: dot, term_count: tc}), do: dot >= tc
 
-    def next_term(%__MODULE__{dot: dot, production: prod}) do
-      Enum.at(prod.terms, dot)
-    end
+    def next_term(%__MODULE__{dot: dot, terms: terms}), do: elem(terms, dot)
 
     def advance(%__MODULE__{} = state, stop, child) do
       %{state | dot: state.dot + 1, stop: stop, children: [child | state.children]}
     end
 
-    def key(%__MODULE__{} = state) do
-      {id(state.rule), id(state.production), state.dot, state.start, state.stop}
+    def key(%__MODULE__{prod_id: prod_id, dot: dot, start: start, stop: stop}) do
+      {prod_id, dot, start, stop}
     end
-
-    defp id(term), do: :erlang.phash2(term)
   end
 
   defmodule Column do
     @moduledoc false
 
-    defstruct [:index, :token, states: nil, count: 0, seen: MapSet.new(), waiting: %{}]
+    defstruct [:index, :token, states: nil, count: 0, seen: %{}, waiting: %{}, predicted: %{}]
 
     def new(index, token \\ nil) do
       %__MODULE__{index: index, token: token, states: :array.new(default: nil)}
@@ -64,17 +69,19 @@ defmodule Yargy.Parser do
     def add(%__MODULE__{} = col, %State{} = state) do
       key = State.key(state)
 
-      if MapSet.member?(col.seen, key) do
-        col
-      else
-        col = %{
+      case col.seen do
+        %{^key => _} ->
           col
-          | states: :array.set(col.count, state, col.states),
-            count: col.count + 1,
-            seen: MapSet.put(col.seen, key)
-        }
 
-        update_waiting_index(col, state)
+        _ ->
+          col = %{
+            col
+            | states: :array.set(col.count, state, col.states),
+              count: col.count + 1,
+              seen: Map.put(col.seen, key, true)
+          }
+
+          update_waiting_index(col, state)
       end
     end
 
@@ -102,8 +109,7 @@ defmodule Yargy.Parser do
       end
     end
 
-    def waiting_for(%__MODULE__{waiting: waiting}, rule) do
-      rule_id = :erlang.phash2(rule)
+    def waiting_for(%__MODULE__{waiting: waiting}, rule_id) do
       Map.get(waiting, rule_id, [])
     end
   end
@@ -116,8 +122,13 @@ defmodule Yargy.Parser do
 
     defstruct [:rule, :tokens, :start, :stop, :children]
 
-    def new(state, all_tokens) do
-      tokens = Enum.slice(all_tokens, state.start, state.stop - state.start)
+    def new(state, token_array) do
+      tokens =
+        if state.start >= state.stop do
+          []
+        else
+          for i <- state.start..(state.stop - 1), do: elem(token_array, i)
+        end
 
       %__MODULE__{
         rule: state.rule,
@@ -212,12 +223,13 @@ defmodule Yargy.Parser do
   (longer match wins, earlier match wins on tie).
   """
   def findall(%{rule: rule}, tokens) when is_list(tokens) do
-    chart = parse(rule, tokens)
+    token_array = List.to_tuple(tokens)
+    chart = parse(rule, token_array)
 
     matches =
       chart
       |> completed_states(rule)
-      |> Enum.map(&Match.new(&1, tokens))
+      |> Enum.map(&Match.new(&1, token_array))
       |> Enum.filter(&Match.valid_relations?/1)
       |> Enum.sort_by(fn m -> {m.start, -(m.stop - m.start)} end)
 
@@ -259,24 +271,31 @@ defmodule Yargy.Parser do
   end
 
   def partial_matches(%Rule{} = rule, tokens) when is_list(tokens) do
-    chart = parse(rule, tokens)
-    last_col = List.last(chart)
+    token_array = List.to_tuple(tokens)
+    chart = parse(rule, token_array)
+    last_col = :array.get(:array.size(chart) - 1, chart)
+    chart_size = :array.size(chart)
 
     last_col
     |> Column.all_states()
     |> Enum.reject(&State.completed?/1)
     |> Enum.filter(fn state -> state.dot > 0 end)
     |> Enum.map(fn state ->
-      matched = Enum.slice(tokens, state.start..(length(chart) - 2)//1)
+      matched =
+        if state.start <= chart_size - 2 do
+          for i <- state.start..(chart_size - 2), do: elem(token_array, i)
+        else
+          []
+        end
 
       %{
         rule_name: rule_label(state.rule),
         dot: state.dot,
-        production_length: length(state.production.terms),
+        production_length: state.term_count,
         start: state.start,
         matched_tokens: Enum.map(matched, & &1.value),
         matched_text: Enum.map_join(matched, " ", & &1.value),
-        progress: state.dot / max(length(state.production.terms), 1)
+        progress: state.dot / max(state.term_count, 1)
       }
     end)
     |> Enum.sort_by(& &1.progress, :desc)
@@ -288,12 +307,11 @@ defmodule Yargy.Parser do
   defp rule_label(%Rule{name: nil}), do: nil
   defp rule_label(%Rule{name: name}), do: inspect(name)
 
-  defp parse(rule, tokens) do
-    token_array = List.to_tuple(tokens)
+  defp parse(rule, token_array) do
     size = tuple_size(token_array) + 1
+    rule_id = :erlang.phash2(rule)
 
     columns = :array.new(size, default: nil)
-
     columns = :array.set(0, Column.new(0), columns)
 
     columns =
@@ -302,13 +320,16 @@ defmodule Yargy.Parser do
         :array.set(i, Column.new(i, token), cols)
       end)
 
+    prod_ids = precompute_prod_ids(rule)
+
     columns =
       Enum.reduce(0..(size - 1), columns, fn i, cols ->
         col = :array.get(i, cols)
 
         col =
           Enum.reduce(rule.productions, col, fn prod, col ->
-            state = State.new(rule, prod, start: i, stop: i)
+            prod_id = Map.fetch!(prod_ids, :erlang.phash2(prod))
+            state = State.new(rule, rule_id, prod, prod_id, start: i, stop: i)
             Column.add(col, state)
           end)
 
@@ -316,7 +337,39 @@ defmodule Yargy.Parser do
         :array.set(i, col, cols)
       end)
 
-    for i <- 0..(size - 1), do: :array.get(i, columns)
+    columns
+  end
+
+  defp precompute_prod_ids(rule) do
+    all_rules = collect_rules(rule, %{})
+
+    all_rules
+    |> Map.values()
+    |> Enum.flat_map(fn r -> Enum.map(r.productions, &{:erlang.phash2(&1), {:erlang.phash2(r), :erlang.phash2(&1)}}) end)
+    |> Map.new()
+  end
+
+  defp collect_rules(%Rule{} = rule, seen) do
+    rule_id = :erlang.phash2(rule)
+
+    if Map.has_key?(seen, rule_id) do
+      seen
+    else
+      seen = Map.put(seen, rule_id, rule)
+
+      Enum.reduce(rule.productions, seen, fn prod, seen ->
+        Enum.reduce(prod.terms, seen, fn
+          %Rule{name: {:forward, _}} = fwd, seen ->
+            collect_rules(Rule.resolve_forward(fwd), seen)
+
+          %Rule{} = r, seen ->
+            collect_rules(r, seen)
+
+          _, seen ->
+            seen
+        end)
+      end)
+    end
   end
 
   defp process_column(col, cols, col_index, size) do
@@ -329,9 +382,7 @@ defmodule Yargy.Parser do
 
   defp process_states(col, cols, state_index, col_index, size) do
     state = Column.get_state(col, state_index)
-
     {col, cols} = process_single_state(col, cols, state, col_index, size)
-
     process_states(col, cols, state_index + 1, col_index, size)
   end
 
@@ -352,19 +403,29 @@ defmodule Yargy.Parser do
   end
 
   defp predict(col, rule) do
-    productions =
+    {resolved_rule, rule_id} =
       case rule do
         %Rule{name: {:forward, _}} = fwd ->
-          Rule.resolve_forward(fwd).productions
+          resolved = Rule.resolve_forward(fwd)
+          {resolved, :erlang.phash2(resolved)}
 
         _ ->
-          rule.productions
+          {rule, :erlang.phash2(rule)}
       end
 
-    Enum.reduce(productions, col, fn prod, col ->
-      state = State.new(rule, prod, start: col.index, stop: col.index)
-      Column.add(col, state)
-    end)
+    case col.predicted do
+      %{^rule_id => true} ->
+        col
+
+      _ ->
+        col = %{col | predicted: Map.put(col.predicted, rule_id, true)}
+
+        Enum.reduce(resolved_rule.productions, col, fn prod, col ->
+          prod_id = {rule_id, :erlang.phash2(prod)}
+          state = State.new(rule, rule_id, prod, prod_id, start: col.index, stop: col.index)
+          Column.add(col, state)
+        end)
+    end
   end
 
   defp scan(cols, state, predicate, col_index, size) when is_function(predicate) do
@@ -393,7 +454,7 @@ defmodule Yargy.Parser do
         :array.get(completed.start, cols)
       end
 
-    parents = Column.waiting_for(start_col, completed.rule)
+    parents = Column.waiting_for(start_col, :erlang.phash2(completed.rule))
 
     col =
       Enum.reduce(parents, col, fn parent, col ->
@@ -405,28 +466,32 @@ defmodule Yargy.Parser do
   end
 
   defp completed_states(columns, rule) do
-    rule_hash = :erlang.phash2(rule)
+    rule_id = :erlang.phash2(rule)
+    size = :array.size(columns)
 
-    Enum.flat_map(columns, fn col ->
+    Enum.flat_map(0..(size - 1), fn i ->
+      col = :array.get(i, columns)
+
       col
       |> Column.all_states()
       |> Enum.filter(fn state ->
-        State.completed?(state) and :erlang.phash2(state.rule) == rule_hash
+        State.completed?(state) and state.rule_id == rule_id
       end)
     end)
   end
 
   defp resolve_overlaps(matches) do
-    Enum.reduce(matches, [], fn match, acc ->
-      if overlaps_any?(acc, match), do: acc, else: acc ++ [match]
-    end)
+    resolve_overlaps(matches, [], 0)
   end
 
-  defp overlaps_any?(accepted, match) do
-    Enum.any?(accepted, fn prev -> overlaps?(prev, match) end)
-  end
+  defp resolve_overlaps([], acc, _), do: Enum.reverse(acc)
 
-  defp overlaps?(m1, m2) do
-    m1.start < m2.stop and m2.start < m1.stop
+  defp resolve_overlaps([match | rest], acc, max_stop) do
+    if match.start < max_stop do
+      resolve_overlaps(rest, acc, max_stop)
+    else
+      new_max = max(max_stop, match.stop)
+      resolve_overlaps(rest, [match | acc], new_max)
+    end
   end
 end

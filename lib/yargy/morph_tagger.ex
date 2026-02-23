@@ -10,19 +10,33 @@ defmodule Yargy.MorphTagger do
 
   @doc "Adds morphological forms to each word token."
   def tag(tokens) when is_list(tokens) do
-    Enum.map(tokens, &tag_token/1)
-  end
-
-  defp tag_token(%Token{type: :word, value: value} = token) do
-    forms =
-      value
-      |> MorphRu.parse()
-      |> Enum.map(fn parse ->
-        %{normalized: parse.normal_form, grams: parse.tag.grammemes}
+    {tagged, _cache} =
+      Enum.map_reduce(tokens, %{}, fn token, cache ->
+        tag_token(token, cache)
       end)
 
-    Token.with_forms(token, forms)
+    tagged
   end
 
-  defp tag_token(token), do: token
+  defp tag_token(%Token{type: :word, value: value} = token, cache) do
+    {forms, cache} =
+      case Map.fetch(cache, value) do
+        {:ok, cached_forms} ->
+          {cached_forms, cache}
+
+        :error ->
+          forms =
+            value
+            |> MorphRu.parse()
+            |> Enum.map(fn parse ->
+              %{normalized: parse.normal_form, grams: parse.tag.grammemes}
+            end)
+
+          {forms, Map.put(cache, value, forms)}
+      end
+
+    {Token.with_forms(token, forms), cache}
+  end
+
+  defp tag_token(token, cache), do: {token, cache}
 end
