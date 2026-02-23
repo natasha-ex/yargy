@@ -1,4 +1,4 @@
-alias Yargy.{Parser, Pipeline, Tokenizer, MorphTagger, Sentenize}
+alias Yargy.{Parser, Pipeline, Tokenizer, MorphTagger}
 
 fixture1 = File.read!(Path.join([__DIR__, "..", "test", "fixtures", "001_penalty_late_delivery.txt"]))
 fixture2 = File.read!(Path.join([__DIR__, "..", "test", "fixtures", "002_defective_claim.txt"]))
@@ -63,10 +63,10 @@ Bench.measure("morph_tokenize(medium)", fn -> Pipeline.morph_tokenize(medium_tex
 Bench.measure("morph_tokenize(long)", fn -> Pipeline.morph_tokenize(long_text) end, 5)
 IO.puts("")
 
-IO.puts("--- Sentenize ---")
-Bench.measure("sentenize(short)", fn -> Sentenize.sentenize(short_text) end, 200)
-Bench.measure("sentenize(medium)", fn -> Sentenize.sentenize(medium_text) end, 20)
-Bench.measure("sentenize(long)", fn -> Sentenize.sentenize(long_text) end, 5)
+IO.puts("--- Sentenize (via razdel) ---")
+Bench.measure("sentenize(short)", fn -> Razdel.sentenize(short_text) end, 200)
+Bench.measure("sentenize(medium)", fn -> Razdel.sentenize(medium_text) end, 20)
+Bench.measure("sentenize(long)", fn -> Razdel.sentenize(long_text) end, 5)
 IO.puts("")
 
 IO.puts("--- Parser (Person grammar) ---")

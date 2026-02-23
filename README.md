@@ -2,7 +2,7 @@
 
 Earley parser with grammar DSL for rule-based information extraction from Russian text.
 
-Elixir port of [natasha/yargy](https://github.com/natasha/yargy). Depends on [morph_ru](https://github.com/natasha-ex/morph_ru) for morphological analysis.
+Elixir port of [natasha/yargy](https://github.com/natasha/yargy). Depends on [morph_ru](https://github.com/natasha-ex/morph_ru) for morphological analysis and [razdel](https://github.com/natasha-ex/razdel) for sentence segmentation.
 
 - Earley parser optimized for Russian free word order
 - **Declarative grammar DSL** with compile-time caching
@@ -46,7 +46,7 @@ full names with patronymics in four patterns (Surname+Name+Patronymic, initials,
 | Component | Python | Elixir | Speedup |
 |---|---|---|---|
 | Tokenize + morph tag | 2.6 ms | 2.9 ms | 0.9× |
-| Sentenize | 1.5 ms | 5.8 ms | 0.3× |
+| Sentenize | 1.5 ms | 2.7 ms | 0.6× |
 | Parse only (Person) | ~57 ms | 36 ms | **1.6×** |
 
 Python's tokenizer is backed by C-compiled regex + pymorphy2's DAWG in C,
@@ -229,7 +229,7 @@ Yargy.Sentenize.sentenize("Привет. Как дела? Хорошо!")
 | `Yargy.Predicate` | Token predicates — `gram`, `type`, `eq`, `normalized` |
 | `Yargy.Relations` | Agreement — `gnc_relation`, `nc_relation` |
 | `Yargy.Tokenizer` | UTF-8 tokenizer with byte/char position tracking |
-| `Yargy.Sentenize` | Sentence splitter |
+| `Yargy.Sentenize` | Sentence splitter (via [razdel](https://hex.pm/packages/razdel)) |
 | `Yargy.MorphTagger` | Morphological tagging via morph_ru |
 | `Yargy.Grammars.*` | Date, NamedDate, Amount, Person |
 
