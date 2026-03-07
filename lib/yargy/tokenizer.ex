@@ -37,9 +37,6 @@ defmodule Yargy.Tokenizer do
         value = binary_part(text, 0, byte_len)
         token = Token.new(value, :punct, pos, pos + 1)
         scan(rest, pos + 1, [token | acc])
-
-      {:other, rest, _byte_len} ->
-        scan(rest, pos + 1, acc)
     end
   end
 
